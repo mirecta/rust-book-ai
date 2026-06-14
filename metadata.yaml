@@ -1,0 +1,11 @@
+---
+title: "Rust pre Systémových Programátorov"
+author: "Miroslav Talasek"
+lang: sk
+date: 2026
+description: |
+  Praktický sprievodca jazykom Rust pre programátorov
+  so skúsenosťami s C/C++, assemblerom a systémovým
+  programovaním. Od ownership po Bevy hry.
+rights: "CC BY-SA 4.0"
+---

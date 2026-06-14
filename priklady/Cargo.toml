@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "ownership",
+    "types",
+    "traits",
+    "lifetimes",
+    "concurrency",
+    "unsafe-demo",
+    "bevy-hra",
+]
+resolver = "2"
