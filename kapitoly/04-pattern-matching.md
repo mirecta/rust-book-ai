@@ -594,6 +594,230 @@ match value {
 
 ---
 
+## Vyberanie hodnôt z Option a Result — všetky mechanizmy
+
+`Option<T>` a `Result<T, E>` sú bežné enumerácie — žiadna špeciálna syntax. Všetky mechanizmy na vyberanie hodnôt z nich fungujú rovnako pre akýkoľvek vlastný enum.
+
+### `match` — keď potrebuješ ošetriť viacero variantov
+
+Úplný, explicitný, kompilátor overí exhaustiveness:
+
+```rust
+match find_port("http") {
+    Some(port) => println!("port: {}", port),
+    None       => println!("neznáma služba"),
+}
+
+match parse_config("port=8080") {
+    Ok(cfg)  => start_server(cfg),
+    Err(e)   => eprintln!("Chyba konfigurácie: {}", e),
+}
+```
+
+### `if let` — keď ťa zaujíma len jeden variant
+
+Stručnejší ako match keď `else` vetva nie je potrebná, alebo je jednoduchá:
+
+```rust
+// Len ak Some — žiadny else
+if let Some(port) = find_port("ssh") {
+    println!("SSH beží na porte {}", port);
+}
+
+// S else vetvou
+if let Ok(port) = parse_port(input) {
+    start(port);
+} else {
+    eprintln!("neplatný port, použijem default");
+    start(DEFAULT_PORT);
+}
+
+// Vnorené — rozbaľ oba naraz
+if let Some(Ok(n)) = maybe_str.map(|s| s.parse::<i32>()) {
+    println!("číslo: {}", n);
+}
+```
+
+### `while let` — spracuj postupnosť až do vyčerpania
+
+Klassický vzor pre fronty, iterátory, parsovanie streamov:
+
+```rust
+let mut stack = vec![1, 2, 3];
+while let Some(top) = stack.pop() {
+    println!("{}", top);  // 3, 2, 1
+}
+
+// Čítaj pakety kým prichádza stream
+while let Some(packet) = stream.next() {
+    process(packet);
+}
+```
+
+### `let else` — vyber hodnotu alebo skoč preč
+
+Pre "musí tam byť, inak tu nemá čo robiť" — **hodnota je dostupná po `let else` bez zanorenia**:
+
+```rust
+fn handle(msg: Option<Message>) {
+    let Some(msg) = msg else {
+        return;  // musí divergovať: return / panic! / break / continue
+    };
+    // msg je tu k dispozícii ako Message, nie Option<Message>
+    process(msg);
+}
+
+fn parse_packet(buf: &[u8]) -> Result<Packet, Error> {
+    let Ok(header) = parse_header(buf) else {
+        return Err(Error::BadHeader);
+    };
+    // header je tu Header, nie Result<Header, _>
+    let Ok(body) = parse_body(&buf[header.len..]) else {
+        return Err(Error::BadBody);
+    };
+    Ok(Packet { header, body })
+}
+```
+
+Bez `let else` by si mal hlboké zanorenie `if let { if let { ... } }` alebo opakované `match` s `return`. `let else` je idiomatický early-return pattern v Ruste.
+
+### `?` — propagácia v Result/Option reťaziach
+
+Vo funkcii ktorá vracia `Result` alebo `Option` — najstručnejší spôsob propagácie chyby vyššie:
+
+```rust
+fn read_port(path: &str) -> Result<u16, io::Error> {
+    let content = fs::read_to_string(path)?;  // Err → okamžitý return Err
+    let port = content.trim().parse::<u16>()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    Ok(port)
+}
+
+// ? funguje aj na Option (ak funkcia vracia Option):
+fn first_digit(s: &str) -> Option<u32> {
+    let c = s.chars().next()?;     // None → return None
+    c.to_digit(10)
+}
+```
+
+### `.unwrap()` / `.expect()` — len keď si istý
+
+Panic ak je `None`/`Err`. Legitímne v testoch, príkladoch, alebo kde vieš že nemôže byť None:
+
+```rust
+// ok v testoch:
+let port = find_port("http").unwrap();
+
+// lepší panic message:
+let config = load_config().expect("config.toml musí existovať");
+
+// NIKDY v production kóde kde vstup pochádza zvonku
+```
+
+### `.unwrap_or()` / `.unwrap_or_else()` — default hodnota
+
+Najčastejší idiom pre "vezmi hodnotu alebo použi default":
+
+```rust
+let port = find_port("ftp").unwrap_or(21);          // eager — default sa vyhodnotí vždy
+
+let port = find_port("ftp").unwrap_or_else(|| {     // lazy — closure len ak None
+    compute_default_port()
+});
+
+let port = find_port("ftp").unwrap_or_default();    // T::default() — u16 = 0
+```
+
+`.unwrap_or_else` je dôležité keď výpočet defaultu je drahý alebo má vedľajšie efekty.
+
+### `.map()` / `.and_then()` — transformácia bez rozbaľovania
+
+Keď chceš transformovať hodnotu vnútri Option/Result bez pattern matchu:
+
+```rust
+// .map() — transformuje Ok/Some, prepúšťa Err/None
+let doubled: Option<u16> = find_port("http").map(|p| p * 2);  // Some(160)
+let text: Option<String> = find_port("http").map(|p| p.to_string());
+
+// .and_then() — flatMap; closure vracia Option/Result (nie T)
+// použitie: keď transformácia môže zlyhať
+let port: Option<u16> = get_config_string("port")     // Option<&str>
+    .filter(|s| !s.is_empty())                          // None ak prázdne
+    .and_then(|s| s.parse::<u16>().ok());               // None ak nie číslo
+
+// Reťazenie pre Result:
+let result = read_file(path)
+    .map(|s| s.trim().to_string())
+    .and_then(|s| s.parse::<Config>().map_err(ConfigError::Parse));
+```
+
+### `.take()` — vyber hodnotu z Option a zanechaj None
+
+Toto je špeciálna metóda na `&mut Option<T>` — vezme hodnotu von, pôvodné miesto zostane `None`. Kľúčová pre ownership keď máš Option v struct poli:
+
+```rust
+struct Worker {
+    task: Option<Task>,
+}
+
+impl Worker {
+    fn run(&mut self) {
+        // take() = move hodnoty von z self.task, zanechá None
+        if let Some(task) = self.task.take() {
+            execute(task);         // task je teraz owned tu
+            // self.task je None — worker je voľný
+        }
+    }
+}
+```
+
+Porovnaj s alternatívami:
+```rust
+// NEFUNGUJE — nemôžeš move z &mut referencie
+if let Some(task) = self.task {  // error: cannot move out of `self.task`
+    execute(task);
+}
+
+// FUNGUJE ale redundantné klonovanie
+if let Some(task) = self.task.clone() {
+    execute(task);
+    self.task = None;  // musíš manuálne vynulovať
+}
+
+// IDIOMATICKÉ — take() naraz vyberá aj maže
+if let Some(task) = self.task.take() {
+    execute(task);
+    // self.task = None  ← automaticky
+}
+```
+
+Súvisiaca metóda `.replace(nová_hodnota)` — vymení obsah a vráti starú hodnotu:
+
+```rust
+let old = self.task.replace(new_task);  // → Option<Task> (predošlá hodnota)
+```
+
+### Rýchly rozhodovací sprievodca
+
+| Situácia | Použij |
+|---|---|
+| Viacero variantov, všetky dôležité | `match` |
+| Len jeden variant ťa zaujíma | `if let` |
+| Spracuj až do None/Err | `while let` |
+| Vyber hodnotu alebo skoč preč (early return) | `let else` |
+| Si vo funkcii vraticajúcej Result/Option | `?` |
+| Transformuj hodnotu bez vyberania | `.map()` / `.and_then()` |
+| Vlastníctvo: vyber z `&mut Option` | `.take()` |
+| Testy / vieš že tam je | `.unwrap()` / `.expect()` |
+| Chceš default ak None/Err | `.unwrap_or()` / `.unwrap_or_else()` |
+
+**Idiomatické poradie preferencie:**
+`?` → `if let` / `match` → `.unwrap_or()` → `.unwrap()` / `.expect()`
+
+`?` je ideálny — propaguje chybu bez boilerplate. `unwrap()` je posledná možnosť — každý `unwrap()` v production kóde je potenciálny panic.
+
+---
+
 ## Zhrnutie
 
 | C switch | Rust match |
