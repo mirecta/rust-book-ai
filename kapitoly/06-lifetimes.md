@@ -596,22 +596,3 @@ Lifetimes sú komplikované len na prvý pohľad. Pravidlo: ak kompilátor žiad
 A ak stále bojuješ s konkrétnym error-om — skús si ho prečítať pozorne. Rust compiler error správy pre lifetimes patria k najlepším v akomkoľvek jazyku. Zvyčajne ti priamo povie čo prežíva čo a kde konflikt nastáva.
 
 Ďalšia kapitola: Error Handling — `Result`, `?`, `thiserror` a `anyhow`.
-
----
-
-## Vizuálny príklad — Lifetime Scope Visualizer
-
-    cargo run --bin k06_lifetimes
-
-Lifetimes sú možno najťažší koncept v Ruste pre pochopenie z textu. Vizualizácia pomáha — uvidíš ich ako farebné horizontálne pruhy reprezentujúce *ako dlho žijú* rôzne referencie.
-
-Demo má 4 scenáre (`SPACE` alebo klávesy `1`-`4`):
-
-1. **Validný borrow** — tri pruhy (`'a`, `x`, `result`) v rovnakej oblasti; `result` je kratší ako `'a` → bezpečné
-2. **Dangling reference** — `result` presahuje za koniec `x` → červená čiara, X symbol, borrow checker by to odmietol
-3. **Struct s lifetime** — `struct Important<'a>` s šípkou ukazujúcou na dáta; struct nesmie prežiť referencovanú hodnotu
-4. **'static** — lifetime ktorý trvá počas celého programu; string literals sú vždy `'static`
-
-Trik na pochopenie: lifetime nie je *dĺžka trvania*, ale *región kódu* kde referencia musí byť validná. Vizuálne pruhy to ilustrujú lepšie než akákoľvek definícia.
-
-Ovládanie: `SPACE`/`1-4` = scenár, `Q` = koniec.

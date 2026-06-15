@@ -11,21 +11,5 @@ path = "src/bin/game_of_life.rs"
 name = "particles"
 path = "src/bin/particles.rs"
 
-[[bin]]
-name = "k06_lifetimes"
-path = "src/bin/k06_lifetimes.rs"
-
-[[bin]]
-name = "k08_iterators"
-path = "src/bin/k08_iterators.rs"
-
-[[bin]]
-name = "k09_threads"
-path = "src/bin/k09_threads.rs"
-
-[[bin]]
-name = "k10_memory"
-path = "src/bin/k10_memory.rs"
-
 [dependencies]
 macroquad = "0.4"

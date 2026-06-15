@@ -7,7 +7,6 @@ members = [
     "concurrency",
     "unsafe-demo",
     "bevy-hra",
-    "tui-demos",
     "grafika",
 ]
 resolver = "2"

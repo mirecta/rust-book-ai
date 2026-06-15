@@ -851,26 +851,6 @@ Closures a iterátory v Ruste nie sú len estetická voľba — sú to nástroje
 
 ---
 
-## Vizuálny príklad — Iterator Pipeline
-
-    cargo run --bin k08_iterators
-
-Iterátory v Ruste sú *lazy* — nič sa nevykoná kým nezavoláš terminálny adaptér ako `collect()` alebo `for`. Toto demo to vizualizuje animáciou.
-
-Sleduješ pipeline `(0..20).filter(|x| x % 2 == 0).map(|x| x * x).take(5).collect()`:
-
-- **Bodky** reprezentujú hodnoty (0, 1, 2, 3, ...) tečúce zľava doprava
-- Pred `filter` boxom: nepárne čísla zmiznu s červeným bliknutím — `filter` ich zahodil
-- Pred `map` boxom: každá bodka zmení číslo (x → x²) a farbu na žltú — transformácia
-- Pred `take` boxom: po piatej hodnote sa pipeline zastaví — `take(5)` skrátil tok
-- V `RESULT` boxe: `[0, 4, 16, 36, 64]`
-
-Stavový riadok dole ukazuje počítadlá — koľko prvkov prešlo cez každý filter. Všimni si: `filter` zahodil 10 z 20, `map` transformoval 10, `take` vzal len 5.
-
-`SPACE` = reštart animácie, `Q` = koniec.
-
----
-
 ## Projekt — Conway's Game of Life
 
 Closures a iterátory sú najlepšie vidieť na reálnom probléme. Conway's Game of Life je simulácia s jednoduchými pravidlami, ale fascinujúcim správaním — a v Ruste sa dá elegantne implementovať cez iterátory.

@@ -936,26 +936,6 @@ Rust výhody oproti C/C++ nie sú len bezpečnosť — sú to aj ergonómia (RAI
 
 ---
 
-## Vizuálny príklad — Thread & Mutex Visualizer
-
-    cargo run --bin k09_threads
-
-Concurrency bugy sú zákerné — data races sa nedajú reprodukovať deterministicky. Toto demo vizualizuje *prečo* `Mutex` funguje ako ochrana.
-
-Vidíš 6 vlákien (farebné kruhy) rotujúcich okolo centrálneho boxu `Mutex<Data>`:
-- Vlákna v **bielej** farbe čakajú alebo vykonávajú inú prácu
-- Blikajúce vlákno sa pokúša získať lock (`acquiring`)
-- **Len jedno vlákno** môže byť vnútri boxu naraz — box sa zafarbí jeho farbou
-- Po 1.5 sekundách uvoľní lock a ďalšie vlákno môže vstúpiť
-
-`SPACE` prepne na **Deadlock scenár** — dva mutexy, dve vlákna, každé drží jeden a čaká na druhý. Červené šípky a blikajúce varovanie ukazujú prečo deadlock nie je bug ktorý Rust zachytí — je to logická chyba, nie memory safety problém.
-
-Pre C programátora: toto je vizualizácia toho prečo `pthread_mutex_lock` + `pthread_mutex_unlock` musíš vždy párovať — a prečo RAII v Ruste (`MutexGuard` s `Drop`) to robí automaticky.
-
-Ovládanie: `SPACE` = deadlock scenár, `Q` = koniec.
-
----
-
 ## Projekt — Mandelbrot Fraktál
 
 Najlepší spôsob ako pochopiť výhodu multithreadingu je meranie. Mandelbrot fraktál je ideálny — každý pixel sa počíta nezávisle, výsledok je vizuálny, a rozdiel medzi single-thread a multi-thread je dramatický.
