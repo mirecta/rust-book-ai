@@ -947,49 +947,126 @@ cargo run --release --bin mandelbrot
 Program vykreslí 800×600 Mandelbrot set dvakrát — raz jedným vláknom, raz s toľkými vláknami koľko má tvoj CPU jadier — a zobrazí čas oboch:
 
 ```
-Rendering 800x600 Mandelbrot set...
-Single-thread:       2.34s
-Multi-thread (8):    0.31s  (7.5× rýchlejšie)
-Uložené: mandelbrot_single.png, mandelbrot_multi.png
+Mandelbrot fraktál — 800×600, max 256 iterácií
+Použité vlákna pre multi-thread render: 8
+
+Single-thread: 2.341s
+  -> Uložené: mandelbrot_single.png
+
+Multi-thread (8 vlákien): 0.312s
+  -> Uložené: mandelbrot_multi.png
+
+Zrýchlenie: 7.5×
 ```
 
-Matematika je jednoduchá — pre každý pixel testujeme či bod `c = cx + i·cy` patrí do Mandelbrotovej množiny iterovaním `z → z² + c`:
+### Matematika — Mandelbrotova množina
+
+Pre každý pixel na obrazovke testujeme, či zodpovedajúci bod `c = cx + i·cy` v komplexnej rovine patrí do Mandelbrotovej množiny. Robíme to iterovaním `z → z² + c` a sledujeme, či `|z|` zostane ohraničené:
 
 ```rust
 fn mandelbrot(cx: f64, cy: f64) -> u32 {
-    let (mut x, mut y) = (0.0, 0.0);
+    let (mut x, mut y) = (0.0_f64, 0.0_f64);
     for i in 0..MAX_ITER {
-        if x*x + y*y > 4.0 { return i; }  // bod "unikol" z kruhu
-        (x, y) = (x*x - y*y + cx, 2.0*x*y + cy);
+        if x * x + y * y > 4.0 {
+            return i;  // bod "unikol" z kruhu |z| > 2
+        }
+        // z = z² + c rozložené na reálnu a imaginárnu zložku:
+        //   Re(z²+c) = x²-y² + cx
+        //   Im(z²+c) = 2xy  + cy
+        (x, y) = (x * x - y * y + cx, 2.0 * x * y + cy);
     }
-    MAX_ITER  // bod zostal ohraničený → je v množine
+    MAX_ITER  // bod pravdepodobne patrí do množiny
 }
 ```
 
-Pre multi-thread rendering rozdelíme riadky medzi vlákna. Každé vlákno dostane svoj rozsah riadkov, pracuje nezávisle, a výsledky poskladáme po skončení:
+Funkcia vracia číslo iterácie, pri ktorej bod „unikol" — to je farba pixelu. Body vnútri množiny (vrátili `MAX_ITER`) sú čierne. Okolie dostane farbu podľa toho, ako rýchlo unikli.
+
+Mapovanie pixela na komplexnú rovinu (x-os: `[-2.5, 1.0]`, y-os: `[-1.0, 1.0]`):
 
 ```rust
-let handles: Vec<_> = chunks.into_iter().map(|(start, end)| {
-    thread::spawn(move || {
-        let mut local = vec![0u8; (end - start) * WIDTH as usize * 3];
-        for row in start..end {
-            for col in 0..WIDTH as usize {
-                let iter = mandelbrot(/* mapovanie pixelu na komplexnú rovinu */);
-                let [r, g, b] = iter_to_color(iter);
-                // uloženie do local buffer
-            }
-        }
-        local   // vlákno vracia svoj kus výsledku
-    })
-}).collect();
+let cx = px as f64 / WIDTH as f64 * 3.5 - 2.5;
+let cy = py as f64 / HEIGHT as f64 * 2.0 - 1.0;
+```
 
-// poskladanie výsledkov
-for (i, handle) in handles.into_iter().enumerate() {
-    let chunk = handle.join().unwrap();
-    pixels[i * chunk_size..][..chunk.len()].copy_from_slice(&chunk);
+### Farebná schéma — Bernsteinove polynómy
+
+Jednoduchý `iter % 256` by dal škaredé pruhy. Namiesto toho použijeme hladký gradient cez Bernsteinove polynómy — tú istú techniku používajú profesionálne fraktálové renderery:
+
+```rust
+fn iter_to_color(iter: u32) -> [u8; 3] {
+    if iter == MAX_ITER { return [0, 0, 0]; }  // vnútro = čierne
+
+    let t = iter as f64 / MAX_ITER as f64;  // t ∈ [0, 1)
+    let r = (9.0  * (1.0-t) * t*t*t         * 255.0) as u8;
+    let g = (15.0 * (1.0-t)*(1.0-t) * t*t  * 255.0) as u8;
+    let b = (8.5  * (1.0-t)*(1.0-t)*(1.0-t)*t* 255.0) as u8;
+    [r, g, b]
 }
 ```
 
-Toto je základný vzor CPU-bound paralelizmu v Ruste. Žiadny `Arc<Mutex<>>` nie je potrebný — vlákna nepotrebujú zdieľať žiadne dáta počas výpočtu, len si na konci odovzdajú výsledok cez `join()`. Rust to vynucuje: ak by si sa pokúsil zdieľať `&mut pixels` naprieč vláknami bez synchronizácie, kód by sa nezkompiloval.
+Výsledok je plynulý prechod od čiernej cez tmavú modrú ku svetlej — klasické „flame" sfarbenie.
 
-Spusti s `--release` pre reálne čísla — debug build má vypnuté optimalizácie a bude výrazne pomalší.
+### Single-thread vs Multi-thread
+
+Single-thread verzia je priamočiara — jeden dvojitý cyklus cez všetky riadky a stĺpce, výsledok do jedného `Vec<u8>`.
+
+Multi-thread verzia rozdelí riadky na chunky a každý chunk spracuje samostatné vlákno:
+
+```rust
+fn render_multi(num_threads: usize) -> Vec<u8> {
+    let chunk_size = HEIGHT / num_threads as u32;
+
+    // Rozsahy riadkov pre každé vlákno — posledný dostane zvyšok
+    let chunks: Vec<(u32, u32)> = (0..num_threads as u32)
+        .map(|i| {
+            let start = i * chunk_size;
+            let end = if i == num_threads as u32 - 1 { HEIGHT }
+                      else { start + chunk_size };
+            (start, end)
+        })
+        .collect();
+
+    // Spustíme vlákno pre každý chunk
+    let handles: Vec<_> = chunks.into_iter().map(|(start_row, end_row)| {
+        thread::spawn(move || {
+            // Každé vlákno má svoj lokálny buffer — žiadna synchronizácia
+            let mut local = vec![0u8; (end_row - start_row) as usize * WIDTH as usize * 3];
+            for py in start_row..end_row {
+                for px in 0..WIDTH {
+                    let cx = px as f64 / WIDTH as f64 * 3.5 - 2.5;
+                    let cy = py as f64 / HEIGHT as f64 * 2.0 - 1.0;
+                    let [r, g, b] = iter_to_color(mandelbrot(cx, cy));
+                    let off = ((py - start_row) as usize * WIDTH as usize + px as usize) * 3;
+                    local[off] = r; local[off+1] = g; local[off+2] = b;
+                }
+            }
+            local  // vracia vlastný kus výsledku
+        })
+    }).collect();
+
+    // Poskladáme výsledky — join() blokuje kým vlákno neskončí
+    let mut pixels = vec![0u8; (WIDTH * HEIGHT * 3) as usize];
+    for (i, handle) in handles.into_iter().enumerate() {
+        let local = handle.join().unwrap();
+        let off = i * chunk_size as usize * WIDTH as usize * 3;
+        pixels[off..off + local.len()].copy_from_slice(&local);
+    }
+    pixels
+}
+```
+
+### Kľúčové Rust koncepty
+
+**`move` closure** — `thread::spawn(move || { ... })` prenesie vlastníctvo `(start_row, end_row)` do vlákna. Bez `move` by sme požičiavali referencie, čo by Rust zamietol — vlákno môže žiť dlhšie než stack rámec, kde premenné existujú.
+
+**Lokálny buffer miesto `Arc<Mutex<>>`** — každé vlákno počíta do svojho `Vec<u8>` a na konci ho vráti cez `join()`. Žiadna synchronizácia počas výpočtu = žiadne čakanie = maximálna rýchlosť. `Arc<Mutex<Vec>>` by bol zbytočný overhead.
+
+**`available_parallelism()`** — Rust štandardná knižnica vie spýtať OS na počet logických jadier:
+
+```rust
+let num_threads = std::thread::available_parallelism()
+    .map(|n| n.get())
+    .unwrap_or(4);  // fallback ak OS nepovie
+```
+
+**Prečo `--release`** — debug build má vypnuté optimalizácie. Mandelbrot v debug móde beží 10–20× pomalšie ako v release. Pri benchmarkoch vždy `--release`.

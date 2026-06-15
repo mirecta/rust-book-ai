@@ -859,52 +859,242 @@ Closures a iterátory sú najlepšie vidieť na reálnom probléme. Conway's Gam
 cargo run --bin game_of_life
 ```
 
-Každá bunka na 80×60 griede je buď živá alebo mŕtva. V každom kroku platia štyri pravidlá:
+Ovládanie: `SPACE` = pauza/spusti, `N` = jeden krok ručne, `R` = náhodný reset, ľavé tlačidlo myši kliknutím prepne bunku živá/mŕtva. Spodný panel zobrazuje aktuálnu generáciu a počet živých buniek.
 
-- Živá bunka s menej ako 2 susedmi **umrie** (izolácia)
-- Živá bunka s 2–3 susedmi **prežije**
-- Živá bunka s viac ako 3 susedmi **umrie** (preplnenie)
-- Mŕtva bunka s presne 3 susedmi **ožije** (reprodukcia)
+### Dátová štruktúra — plochý Vec namiesto 2D poľa
 
-Kľúčová časť implementácie — výpočet novej generácie cez iterátory:
+Mriežka 80×60 buniek (`COLS × ROWS`) je uložená ako jeden `Vec<bool>` v row-major poradí:
+
+```rust
+struct Grid {
+    cells: Vec<bool>,  // index = row * COLS + col
+}
+```
+
+Toto je rovnaký prístup ako v C pri cache-friendly 2D poliach. Prístup na bunku `(col, row)` je `cells[row * COLS + col]`. Hraničné podmienky (bunky mimo griedy = mŕtve) riešime priamo v getteri:
+
+```rust
+fn get(&self, col: i32, row: i32) -> bool {
+    if col < 0 || row < 0 || col >= COLS as i32 || row >= ROWS as i32 {
+        return false;  // mimo hranice = mŕtva bunka
+    }
+    self.cells[row as usize * COLS + col as usize]
+}
+```
+
+### Počítanie susedov cez iterátor
+
+Každá bunka má 8 susedov (8 smerov vrátane diagonál). Namiesto 8 `if`-ov alebo vnoreného cyklu použijeme pole ofsetov a `filter`:
+
+```rust
+fn count_neighbors(&self, col: i32, row: i32) -> u8 {
+    [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+        .iter()
+        .filter(|(dc, dr)| self.get(col + dc, row + dr))
+        .count() as u8
+}
+```
+
+`.filter(predikát).count()` — klasický funkcionálny vzor. `get()` automaticky ignoruje susedov mimo mriežky.
+
+### Nová generácia — `flat_map` + `collect`
+
+Tu vidíme closures a iterátory v plnej sile. Celá logika novej generácie v jednom výraze:
 
 ```rust
 fn step(&self) -> Grid {
-    let cells = (0..ROWS).flat_map(|row| {
-        (0..COLS).map(move |col| {
-            let neighbors = self.count_neighbors(col as i32, row as i32);
-            let alive = self.get(col as i32, row as i32);
-            matches!((alive, neighbors), (true, 2) | (true, 3) | (false, 3))
+    let cells = (0..ROWS)
+        .flat_map(|row| {
+            (0..COLS).map(move |col| {           // move = row patrí closure
+                let neighbors = self.count_neighbors(col as i32, row as i32);
+                let alive     = self.get(col as i32, row as i32);
+                // Štyri pravidlá Conwayovej hry v jednom matches!
+                matches!((alive, neighbors),
+                    (true, 2) | (true, 3) |      // živá prežije s 2-3 susedmi
+                    (false, 3)                   // mŕtva ožije s presne 3
+                )
+            })
         })
-    }).collect();
+        .collect();
     Grid { cells }
 }
 ```
 
-`flat_map` + `collect` — žiadna mutácia, žiadny indexing, žiadna šanca na off-by-one. Celá logika nové generácie v jednom výraze. Porovnaj s ekvivalentným C kódom: dva vnorené for cykly, `new_grid[i][j] = ...`, manuálne hraničné podmienky.
+`(0..ROWS).flat_map(...)` vytvorí iterátor cez všetky riadky, vnútorný `map` ho rozbalí na jednotlivé bunky — výsledok je plochý iterátor hodnôt `bool`. `collect()` ich zozbiera do `Vec<bool>`. Celý výpočet je bez mutácie — nevytvárame `new_grid` a neprepisujeme ho, len zostavujeme novú hodnotu.
 
-Ovládanie: `SPACE` = pauza/spusti, `N` = jeden krok ručne, `R` = náhodný reset, `LMB` = kliknutím prepni bunku.
+**`move` v closure** — vnútorná closure `move |col| { ... }` musí zachytiť `row` z vonkajšej closure hodnotou (nie referenciou), pretože každá iterácia `flat_map` by inak zápolila o to isté `row`.
+
+**`matches!` makro** — skrátený pattern matching. Namiesto:
+```rust
+(alive && neighbors == 2) || (alive && neighbors == 3) || (!alive && neighbors == 3)
+```
+napíšeme prehľadnejší tuple pattern. Všetky ostatné kombinácie implicitne vrátia `false`.
+
+Porovnaj s ekvivalentným C kódom: dva vnorené for cykly, `new_grid[i][j] = ...`, explicitné `if alive...else if...`, manuálna alokácia a kopírovanie.
+
+### Časovanie — accumulator pattern
+
+Simulácia beží na konštantnej rýchlosti 10 krokov/s (100 ms/krok) bez ohľadu na FPS:
+
+```rust
+const STEP_INTERVAL: f32 = 0.1;  // 100 ms
+let mut accumulated: f32 = 0.0;
+
+// v smyčke každý frame:
+accumulated += dt;
+if accumulated >= STEP_INTERVAL {
+    accumulated -= STEP_INTERVAL;  // odpočítame — nie reset na 0!
+    grid = grid.step();
+    generation += 1;
+}
+```
+
+`accumulated -= STEP_INTERVAL` namiesto `= 0.0` zachová zvyšok — ak frame trval 150 ms, ďalší krok príde o 50 ms skôr. Toto je štandardný "fixed timestep" vzor v hernom vývoji.
+
+### Náhodná inicializácia bez externej knižnice
+
+`randomize()` používa XorShift — jednoduchý pseudo-random algoritmus, ktorý potrebuje len tri XOR + shift operácie:
+
+```rust
+fn randomize(&mut self) {
+    let mut seed = get_time().to_bits();  // seed z časovača
+    for cell in self.cells.iter_mut() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        *cell = (seed & 3) == 0;  // ~25% šanca na živú bunku
+    }
+}
+```
+
+`(seed & 3) == 0` — pravdivé pre 1 z 4 hodnôt posledných 2 bitov → ~25% živých buniek. Hustota ~25% dáva zaujímavé vzory bez okamžitého vyhynutia.
 
 ---
 
 ## Projekt — Particle Physics
 
-Ďalší demo ukazuje ako sa `Vec<T>` a iterátory kombinujú s update looopom — základným vzorom pre akúkoľvek simuláciu alebo hru.
+Tento demo ukazuje ako sa `Vec<T>`, structs a iterátory kombinujú v update loope — základnom vzore pre akúkoľvek simuláciu alebo hru.
 
 ```bash
 cargo run --bin particles
 ```
 
-Program udržiava `Vec<Particle>` kde každá častica má pozíciu, rýchlosť, farbu a polomer. Každý snímok:
+Drž ľavé tlačidlo myši a pridávaj nové bodky (max 1000), `R` vyčistí všetky. Každá častica padá vplyvom gravitácie a odráža sa od stien s energetickými stratami.
+
+### Štruktúra Particle
+
+Každá častica je jednoduchý struct bez referencií, bez heap alokácií navyše — presne ako C struct:
 
 ```rust
-// update — iter_mut pre mutable prístup
-particles.iter_mut().for_each(|p| p.update(dt));
-
-// draw — iter pre immutable prístup
-particles.iter().for_each(|p| p.draw());
+struct Particle {
+    x: f32, y: f32,      // pozícia
+    vx: f32, vy: f32,    // rýchlosť
+    color: Color,
+    radius: f32,
+}
 ```
 
-Týchto dvoch riadkov je celý render loop. Rust vynucuje správne vlastníctvo — `iter_mut()` a `iter()` nemôžeš zameniť ak by to spôsobilo problém. Drž ľavé tlačidlo myši a pridávaj nové bodky, `R` vyčistí všetky.
+Farba a polomer sa vypočítajú pri vytvorení z pozície spawnu, takže bez externého RNG dostaneme vizuálnu variáciu:
 
-Tento vzor — `Vec<T>` s `iter_mut().for_each(update)` — je základ každého systému entít, od fyzikálnych simulácií po herné enginy.
+```rust
+fn new(x: f32, y: f32) -> Self {
+    let angle = (x * 7.3 + y * 3.7).sin() * 6.28;
+    let speed = 50.0 + (x * 13.1).abs() % 150.0;
+    Particle {
+        x, y,
+        vx: angle.cos() * speed,
+        vy: angle.sin() * speed - 100.0,  // trocha nahor pri spawne
+        color: Color::new(
+            0.3 + (x * 0.01).sin().abs() * 0.7,  // červená z x
+            0.5 + (y * 0.013).cos().abs() * 0.5, // zelená z y
+            0.8, 0.9,
+        ),
+        radius: 3.0 + (x * 0.1).abs() % 4.0,
+    }
+}
+```
+
+`sin`/`cos` z pozície ako pseudo-hash — deterministické, ale vizuálne náhodné. Každá myšia pozícia dá iné farby a rýchlosti.
+
+### Fyzika — gravitácia a elastické odrazy
+
+`update()` integruje pohybovú rovnicu Eulerovou metódou (dt = čas od posledného snímku v sekundách):
+
+```rust
+fn update(&mut self, dt: f32) {
+    const GRAVITY: f32 = 300.0;  // pixelov za sekundu²
+    self.vy += GRAVITY * dt;     // gravitačná akcelerácia
+    self.x  += self.vx * dt;
+    self.y  += self.vy * dt;
+
+    let w = screen_width();
+    let h = screen_height() - 30.0;  // -30 pre status bar
+
+    // Odraz od pravej steny: daj späť dovnútra, obráť x-rýchlosť, zoslab o 20%
+    if self.x > w - self.radius {
+        self.x = w - self.radius;
+        self.vx = -self.vx.abs() * 0.8;
+    }
+    // Odraz od podlahy
+    if self.y > h - self.radius {
+        self.y = h - self.radius;
+        self.vy = -self.vy.abs() * 0.8;
+    }
+    // ... rovnako pre ľavú stenu a strop
+}
+```
+
+`* 0.8` je koeficient reštitúcie — každý odraz stratí 20% energie. Po niekoľkých odrazoch sa častica ustáli. Koeficient 1.0 by dal večný odraz (ideálna pružnosť), 0.0 by zastavil pohyb ihneď.
+
+### Render loop — `iter_mut` vs `iter`
+
+Celý render loop sú dva riadky:
+
+```rust
+particles.iter_mut().for_each(|p| p.update(dt));  // mutable — mení stav
+particles.iter().for_each(|p| p.draw());           // immutable — len číta
+```
+
+Rust borrow checker vynucuje poradie: nemôžeš volať `iter()` a `iter_mut()` naraz — to by bolo čítanie a zápis do toho istého `Vec` súčasne. Tu sú sekvenčne, takže je to správne. Ak by si ich dal do jednej linky (`chain`, `zip`...) a skúsil meniť aj čítať — kompilátor by odmietol.
+
+Pre porovnanie v C++: `for (auto& p : particles) p.update(dt);` nič takéto nevynucuje — pri multithreadingu alebo iterácii nad sa-mením vektorom dostaneš UB.
+
+### Spawnovanie particles — `pseudo_offset`
+
+Pri kliknutí sa spawne 3 particles naraz, každá s malým náhodným ofsetom okolo kurzora:
+
+```rust
+fn pseudo_offset(seed: &mut u64) -> f32 {
+    *seed ^= *seed << 13;
+    *seed ^= *seed >> 7;
+    *seed ^= *seed << 17;
+    ((*seed & 0xFF) as f32 / 127.5) - 1.0  // výsledok v [-1.0, 1.0]
+}
+
+// pri kliknutí:
+if is_mouse_button_down(MouseButton::Left) && particles.len() < 1000 {
+    let (mx, my) = mouse_position();
+    for _ in 0..3 {
+        let ox = pseudo_offset(&mut seed) * 10.0;
+        let oy = pseudo_offset(&mut seed) * 10.0;
+        particles.push(Particle::new(mx + ox, my + oy));
+    }
+}
+```
+
+XorShift berie `&mut u64` — stav je vonku, funkcia ho mutuje a vracia ďalšie číslo. Toto je základný vzor pre pseudo-RNG bez `unsafe` a bez externých crates.
+
+Limit 1000 particles je explicitná ochrana pred neobmedzeným rastom `Vec` — pri 60 FPS by bez limitu aplikácia spomalila do sekundy.
+
+### Vzor — Vec entít s update/draw oddeleným
+
+Tento idiom:
+
+```rust
+let mut entities: Vec<T> = Vec::new();
+// každý frame:
+entities.iter_mut().for_each(|e| e.update(dt));
+entities.iter().for_each(|e| e.draw());
+```
+
+je základ každého systému entít — od fyzikálnych simulácií po herné enginy. Bevy (kapitola 11+) ho rozširuje na ECS (Entity Component System), kde `update` systémy a `draw` systémy bežia paralelne cez viacero vlákien.
