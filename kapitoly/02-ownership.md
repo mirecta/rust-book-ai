@@ -299,7 +299,69 @@ Správne riešenie: vráť vlastníka, nie referenciu:
 
 ```rust
 fn get_string() -> String {   // vrátime vlastníctvo — String sa presunie von z funkcie
-    String::from("hello")
+    String::from("hello")     // bez bodkočiarky = návratová hodnota
+}
+```
+
+### Implicitný return — výraz bez bodkočiarky
+
+Toto je jedno z prvých vecí čo C/C++ programátorov prekvapí. V Ruste **posledný výraz bez bodkočiarky je návratová hodnota funkcie** — `return` je voliteľné:
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b          // bez ; — toto je návratová hodnota
+}
+
+fn add_explicit(a: i32, b: i32) -> i32 {
+    return a + b;  // ekvivalentné — return s bodkočiarkou
+}
+```
+
+Bodkočiarka mení výraz na príkaz (statement) — ktorý nič nevracia (typ `()`). Ak náhodou napíšeš:
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b;   // ; tu = chyba! funkcia vracia () nie i32
+}
+```
+
+Kompilátor hlási:
+```
+error[E0308]: mismatched types
+  expected `i32`, found `()`
+help: consider removing this semicolon
+```
+
+Toto platí aj pre bloky `{}`, `if`, `match` — všetko sú výrazy:
+
+```rust
+let x = if podmienka { 1 } else { 2 };  // if je výraz, vracia hodnotu
+
+let y = {
+    let a = 3;
+    let b = 4;
+    a * b        // posledný výraz bloku — y = 12
+};
+
+fn klasifikuj(n: i32) -> &'static str {
+    match n {
+        i32::MIN..=-1 => "záporné",
+        0             => "nula",
+        _             => "kladné",   // match je výraz — vracia &str
+    }
+}
+```
+
+Explicitný `return` používaj len pre predčasný návrat zo stredu funkcie:
+
+```rust
+fn najdi(v: &[i32], ciel: i32) -> Option<usize> {
+    for (i, &val) in v.iter().enumerate() {
+        if val == ciel {
+            return Some(i);  // return uprostred — predčasný výstup
+        }
+    }
+    None  // posledný výraz — normálny návrat
 }
 ```
 
