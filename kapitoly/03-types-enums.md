@@ -309,6 +309,340 @@ fn main() {
 }
 ```
 
+---
+
+## Rozloženie dát v pamäti
+
+Toto je kapitola pre C/ASM programátorov — väčšina z vás to intuitívne chápe, ale Rust má niekoľko vlastností ktoré sa líšia od C, a niektoré optimalizácie ktoré C nemá. Poďme si to prejsť systematicky.
+
+### Veľkosti primitívnych typov
+
+Na rozdiel od C (`int` = závisí od platformy), Rust má pevné veľkosti pre všetky základné typy:
+
+| Typ | Veľkosť | Zarovnanie | Poznámka |
+|-----|---------|-----------|---------|
+| `bool` | 1 B | 1 B | `true` = 1, `false` = 0 |
+| `u8` / `i8` | 1 B | 1 B | |
+| `u16` / `i16` | 2 B | 2 B | |
+| `u32` / `i32` | 4 B | 4 B | |
+| `u64` / `i64` | 8 B | 8 B | |
+| `u128` / `i128` | 16 B | 16 B | |
+| `f32` | 4 B | 4 B | IEEE 754 single |
+| `f64` | 8 B | 8 B | IEEE 754 double |
+| `char` | 4 B | 4 B | Unicode scalar (nie u8!) |
+| `usize` / `isize` | 8 B (64-bit) | 8 B | veľkosť pointera |
+| `&T` / `*const T` | 8 B | 8 B | thin pointer |
+| `&[T]` / `&str` | 16 B | 8 B | fat pointer: ptr + len |
+| `&dyn Trait` | 16 B | 8 B | fat pointer: ptr + vtable |
+| `Box<T>` | 8 B | 8 B | ako pointer |
+| `String` | 24 B | 8 B | ptr + len + cap |
+| `Vec<T>` | 24 B | 8 B | ptr + len + cap |
+| `Option<&T>` | 8 B | 8 B | null ptr optimization |
+
+```rust
+use std::mem::{size_of, align_of};
+
+fn main() {
+    println!("bool:   {} B, align {}", size_of::<bool>(),   align_of::<bool>());
+    println!("char:   {} B, align {}", size_of::<char>(),   align_of::<char>());
+    println!("usize:  {} B, align {}", size_of::<usize>(),  align_of::<usize>());
+    println!("String: {} B, align {}", size_of::<String>(), align_of::<String>());
+    println!("&str:   {} B, align {}", size_of::<&str>(),   align_of::<&str>());
+}
+// Na 64-bit systéme:
+// bool:   1 B, align 1
+// char:   4 B, align 4
+// usize:  8 B, align 8
+// String: 24 B, align 8
+// &str:   16 B, align 8
+```
+
+Poznámka ku `char` — v Ruste `char` je vždy 4 bajty (Unicode scalar value, U+0000 až U+10FFFF). Na rozdiel od C kde `char` je 1 bajt (ASCII alebo implementation-defined). `&str` a `String` uchovávajú text v UTF-8 (1–4 bajty na znak), `char` sa používa len keď explicitne pracuješ s jedným Unicode znakom.
+
+### Struct — padding a zarovnanie
+
+Každý typ má zarovnanie (alignment) — adresa v pamäti musí byť násobkom tohto čísla. CPU požaduje `u32` na adrese deleniteľnej 4, `u64` na adrese deleniteľnej 8. Ak polia nesedí priamo za sebou, kompilátor pridá **padding** (prázdne bajty).
+
+Rust preusporiadava polia štruktúry pre minimálny padding, čo C bez `__attribute__((packed))` nerobí:
+
+```
+// C-poradie (zlé): a, b, c
+//
+// Offset  Obsah
+// 0       [a u8 ]
+// 1       [pad  ] ← 3 bajty padding (b musí byť na offset % 4 == 0)
+// 2       [pad  ]
+// 3       [pad  ]
+// 4       [b u32] [b u32] [b u32] [b u32]
+// 8       [c u8 ]
+// 9       [pad  ] ← 3 bajty padding (struct musí mať veľkosť % 4 == 0)
+// 10      [pad  ]
+// 11      [pad  ]
+// sizeof = 12
+
+// Rust preusporiadá na: b, a, c
+//
+// Offset  Obsah
+// 0       [b u32] [b u32] [b u32] [b u32]
+// 4       [a u8 ]
+// 5       [c u8 ]
+// 6       [pad  ] ← 2 bajty padding (struct musí mať veľkosť % 4 == 0)
+// 7       [pad  ]
+// sizeof = 8
+```
+
+```rust
+use std::mem::size_of;
+
+struct ZlePoradie {
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+struct Dobre {
+    b: u32,
+    a: u8,
+    c: u8,
+}
+
+fn main() {
+    println!("ZlePoradie: {} B", size_of::<ZlePoradie>());  // 12
+    println!("Dobre:      {} B", size_of::<Dobre>());       // 8
+}
+```
+
+Rust to automaticky preusporiadava — takže v praxi ti na poradí polí nezáleží pre výkon. **Ale**: Rust neurčuje presné poradie polí v pamäti (bez `#[repr(C)]`). Nespoliehaj sa naň pri FFI alebo priamom castovaní na bajty.
+
+### `#[repr(...)]` — kontrola rozloženia
+
+Rust má viacero `repr` atribútov na explicitné riadenie pamäťového rozloženia:
+
+```rust
+// Predvolené — Rust môže preusporiadať polia
+struct Default { a: u8, b: u32, c: u8 }
+
+// C-kompatibilné — polia v definovanom poradí, C padding pravidlá
+#[repr(C)]
+struct CLayout { a: u8, b: u32, c: u8 }  // sizeof = 12
+
+// Packed — žiadny padding, polia tesne za sebou
+// POZOR: môže spôsobiť unaligned prístupy = pomalé alebo crash na niektorých CPU
+#[repr(packed)]
+struct Packed { a: u8, b: u32, c: u8 }   // sizeof = 6
+
+// Transparentné — newtype wrapper s rovnakým rozložením ako vnútorný typ
+#[repr(transparent)]
+struct Wrapper(u32);  // sizeof = 4, zarovnanie = 4
+```
+
+`#[repr(C)]` je nevyhnutné pri:
+- FFI (volanie C funkcií, ktoré berú ukazovatele na struct)
+- `mmap` súborov s fixným binárnym formátom
+- Priamom castovaní na `&[u8]` (network packets, protokoly)
+
+```rust
+#[repr(C)]
+struct EthernetFrame {
+    dst_mac:  [u8; 6],
+    src_mac:  [u8; 6],
+    ethertype: u16,
+    // payload nasleduje
+}
+
+// Môžeš castovať sieťový buffer priamo:
+let frame = unsafe {
+    &*(raw_bytes.as_ptr() as *const EthernetFrame)
+};
+```
+
+### Enum — veľkosť a ako ju zmenšiť
+
+Enum je tagged union. Veľkosť = veľkosť najväčšieho variantu + tag (zaoblené na zarovnanie):
+
+```rust
+use std::mem::size_of;
+
+enum Maly {
+    A(u8),    // 1 B
+    B(u16),   // 2 B
+}
+// tag: 1 B, dáta: 2 B, padding: 1 B → sizeof = 4
+
+enum Velky {
+    Quit,
+    Move { x: i32, y: i32 },  // 8 B
+    Write(String),              // 24 B ← najväčší
+    Color(u8, u8, u8),         // 3 B
+}
+// sizeof(Velky) ≈ 32 B (24 dáta + tag + padding)
+
+fn main() {
+    println!("Maly:  {} B", size_of::<Maly>());   // 4
+    println!("Velky: {} B", size_of::<Velky>());  // 32
+}
+```
+
+Problém nastáva keď jeden variant je oveľa väčší ako ostatné — každá inštancia enum zaberá toľko pamäte ako ten najväčší variant, aj keď je aktívny malý variant.
+
+**Riešenie: `Box<T>` pre veľké varianty**
+
+`Box<T>` presunie veľké dáta na heap — v enum zostane len pointer (8 bajtov):
+
+```rust
+// Pred: každý Expression zaberá toľko ako najväčší variant
+enum ExpressionBig {
+    Number(f64),                           // 8 B
+    Variable(String),                      // 24 B
+    BinaryOp {                             // 8 + 2 rekurzívne = ∞ bez Box
+        op: char,
+        left:  Box<ExpressionBig>,         // 8 B (pointer na heap)
+        right: Box<ExpressionBig>,         // 8 B
+    },
+    FunctionCall {
+        name: String,                      // 24 B
+        args: Vec<ExpressionBig>,          // 24 B
+    },
+}
+
+// Po optimalizácii — veľké varianty sa baxujú:
+enum Expression {
+    Number(f64),                           // 8 B
+    Variable(String),                      // 24 B
+    BinaryOp(Box<BinaryOp>),               // 8 B (pointer)
+    FunctionCall(Box<FunctionCall>),       // 8 B (pointer)
+}
+
+struct BinaryOp {
+    op: char,
+    left: Expression,
+    right: Expression,
+}
+```
+
+Kompilátor ťa na to upozorní: `clippy` má lint `large_enum_variant` ktorý varuje keď jeden variant je oveľa väčší ako ostatné.
+
+**`#[repr(u8)]` — zmenšenie tagu**
+
+Predvolene Rust môže použiť `i32` pre tag enumu. Pre malé enumy bez dát (alebo s malými dátami) môžeš tag zmenšiť:
+
+```rust
+#[repr(u8)]
+enum Status {
+    Idle    = 0,
+    Running = 1,
+    Stopped = 2,
+    Error   = 255,
+}
+// sizeof = 1 B (bez extra paddingu)
+
+#[repr(u8)]
+enum Compact {
+    A,       // 0
+    B(u8),   // 1, dáta: u8
+    C(u16),  // 2, dáta: u16
+}
+// sizeof = 4 B (tag 1B + max dáta 2B + padding 1B)
+```
+
+### Null pointer optimization (NPO)
+
+Rust robí špeciálnu optimalizáciu pre `Option<T>` kde `T` nemôže byť null — pointer typy, referencie, `NonNull<T>`, `Box<T>`:
+
+```rust
+use std::mem::size_of;
+
+fn main() {
+    // Referencie a Box nemôžu byť null — None reprezentuje null
+    println!("{}", size_of::<Option<&u32>>());       // 8 (nie 16!)
+    println!("{}", size_of::<Option<Box<u32>>>());   // 8 (nie 16!)
+    println!("{}", size_of::<Option<fn()>>());       // 8
+
+    // Pre u32 Rust nemá "reserved" hodnotu — musí pridať tag
+    println!("{}", size_of::<Option<u32>>());        // 8 (4 dáta + 4 tag+padding)
+    println!("{}", size_of::<Option<bool>>());       // 1 (bool má rezervovanú hodnotu 2)
+}
+```
+
+`Option<bool>` je tiež optimalizovaný — `bool` má platné hodnoty 0 a 1, takže Rust použije hodnotu 2 ako `None`. Výsledok: `size_of::<Option<bool>>() == 1`.
+
+### Zero-sized types (ZST)
+
+Niektoré typy majú veľkosť 0 bajtov — existujú len pre typovú bezpečnosť, nemajú runtime overhead:
+
+```rust
+struct Unit;           // ZST — 0 bajtov
+struct Marker<T>(std::marker::PhantomData<T>);  // ZST
+
+// Vec<ZST> je špeciálny — alokuje 0 bajtov ale počíta len
+let v: Vec<Unit> = (0..1000).map(|_| Unit).collect();
+println!("{}", std::mem::size_of_val(&v));  // 24 (Vec metadata)
+println!("{}", v.len());                    // 1000
+
+// Marker komponenty v Bevy sú ZST:
+#[derive(Component)]
+struct Player;  // 0 bajtov na entity — len tag v ECS
+```
+
+### Praktický postup: meranie a optimalizácia
+
+```rust
+use std::mem::{size_of, size_of_val, align_of};
+
+#[derive(Debug)]
+enum AstNode {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec<AstNode>),
+    Map(std::collections::HashMap<String, AstNode>),
+}
+
+fn main() {
+    // Zisti veľkosť pred optimalizáciou
+    println!("AstNode: {} B", size_of::<AstNode>());
+
+    // Zisti veľkosť konkrétnej hodnoty
+    let node = AstNode::Int(42);
+    println!("AstNode::Int instance: {} B", size_of_val(&node));
+
+    // Zarovnanie
+    println!("align: {} B", align_of::<AstNode>());
+}
+```
+
+Ak `AstNode` je príliš veľký (napr. 56+ B), vybožuj veľké varianty:
+
+```rust
+enum AstNodeOpt {
+    Int(i64),
+    Float(f64),
+    Str(Box<str>),                              // Box<str> = 16 B namiesto String 24 B
+    List(Box<Vec<AstNodeOpt>>),                 // 8 B namiesto Vec 24 B
+    Map(Box<std::collections::HashMap<String, AstNodeOpt>>), // 8 B
+}
+// sizeof ≈ 16 B (max: Str = pointer 8 + len 8)
+```
+
+**`Box<str>` vs `String`**: `String` je 24 B (ptr + len + capacity). `Box<str>` je 16 B (ptr + len) — bez capacity, pretože box nie je mutovateľný buffer. Pre read-only stringy v dátových štruktúrach je `Box<str>` menší.
+
+### Zhrnutie pamäťového rozloženia
+
+| Typ | Stack veľkosť | Heap |
+|-----|--------------|------|
+| `u8`..`u64`, `f32`/`f64` | 1–8 B | nie |
+| `&T` (thin ref) | 8 B | nie |
+| `&[T]`, `&str` (fat ref) | 16 B | nie |
+| `Box<T>` | 8 B | sizeof(T) |
+| `String` | 24 B | dĺžka textu |
+| `Vec<T>` | 24 B | len * sizeof(T) |
+| `Option<&T>` | 8 B (NPO) | nie |
+| `Option<u32>` | 8 B | nie |
+| Enum | max(varianty) + tag | závisí od obsahu |
+| ZST | 0 B | nie |
+
+---
+
 ### Enum v praxi: chybové stavy
 
 Enum je ideálny na modelovanie chybových stavov, kde rôzne chyby majú rôzne kontextové informácie:
