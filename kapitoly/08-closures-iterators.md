@@ -868,3 +868,63 @@ Sleduješ pipeline `(0..20).filter(|x| x % 2 == 0).map(|x| x * x).take(5).collec
 Stavový riadok dole ukazuje počítadlá — koľko prvkov prešlo cez každý filter. Všimni si: `filter` zahodil 10 z 20, `map` transformoval 10, `take` vzal len 5.
 
 `SPACE` = reštart animácie, `Q` = koniec.
+
+---
+
+## Projekt — Conway's Game of Life
+
+Closures a iterátory sú najlepšie vidieť na reálnom probléme. Conway's Game of Life je simulácia s jednoduchými pravidlami, ale fascinujúcim správaním — a v Ruste sa dá elegantne implementovať cez iterátory.
+
+```bash
+cargo run --bin game_of_life
+```
+
+Každá bunka na 80×60 griede je buď živá alebo mŕtva. V každom kroku platia štyri pravidlá:
+
+- Živá bunka s menej ako 2 susedmi **umrie** (izolácia)
+- Živá bunka s 2–3 susedmi **prežije**
+- Živá bunka s viac ako 3 susedmi **umrie** (preplnenie)
+- Mŕtva bunka s presne 3 susedmi **ožije** (reprodukcia)
+
+Kľúčová časť implementácie — výpočet novej generácie cez iterátory:
+
+```rust
+fn step(&self) -> Grid {
+    let cells = (0..ROWS).flat_map(|row| {
+        (0..COLS).map(move |col| {
+            let neighbors = self.count_neighbors(col as i32, row as i32);
+            let alive = self.get(col as i32, row as i32);
+            matches!((alive, neighbors), (true, 2) | (true, 3) | (false, 3))
+        })
+    }).collect();
+    Grid { cells }
+}
+```
+
+`flat_map` + `collect` — žiadna mutácia, žiadny indexing, žiadna šanca na off-by-one. Celá logika nové generácie v jednom výraze. Porovnaj s ekvivalentným C kódom: dva vnorené for cykly, `new_grid[i][j] = ...`, manuálne hraničné podmienky.
+
+Ovládanie: `SPACE` = pauza/spusti, `N` = jeden krok ručne, `R` = náhodný reset, `LMB` = kliknutím prepni bunku.
+
+---
+
+## Projekt — Particle Physics
+
+Ďalší demo ukazuje ako sa `Vec<T>` a iterátory kombinujú s update looopom — základným vzorom pre akúkoľvek simuláciu alebo hru.
+
+```bash
+cargo run --bin particles
+```
+
+Program udržiava `Vec<Particle>` kde každá častica má pozíciu, rýchlosť, farbu a polomer. Každý snímok:
+
+```rust
+// update — iter_mut pre mutable prístup
+particles.iter_mut().for_each(|p| p.update(dt));
+
+// draw — iter pre immutable prístup
+particles.iter().for_each(|p| p.draw());
+```
+
+Týchto dvoch riadkov je celý render loop. Rust vynucuje správne vlastníctvo — `iter_mut()` a `iter()` nemôžeš zameniť ak by to spôsobilo problém. Drž ľavé tlačidlo myši a pridávaj nové bodky, `R` vyčistí všetky.
+
+Tento vzor — `Vec<T>` s `iter_mut().for_each(update)` — je základ každého systému entít, od fyzikálnych simulácií po herné enginy.

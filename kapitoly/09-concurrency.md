@@ -953,3 +953,63 @@ Vidíš 6 vlákien (farebné kruhy) rotujúcich okolo centrálneho boxu `Mutex<D
 Pre C programátora: toto je vizualizácia toho prečo `pthread_mutex_lock` + `pthread_mutex_unlock` musíš vždy párovať — a prečo RAII v Ruste (`MutexGuard` s `Drop`) to robí automaticky.
 
 Ovládanie: `SPACE` = deadlock scenár, `Q` = koniec.
+
+---
+
+## Projekt — Mandelbrot Fraktál
+
+Najlepší spôsob ako pochopiť výhodu multithreadingu je meranie. Mandelbrot fraktál je ideálny — každý pixel sa počíta nezávisle, výsledok je vizuálny, a rozdiel medzi single-thread a multi-thread je dramatický.
+
+```bash
+cargo run --release --bin mandelbrot
+```
+
+Program vykreslí 800×600 Mandelbrot set dvakrát — raz jedným vláknom, raz s toľkými vláknami koľko má tvoj CPU jadier — a zobrazí čas oboch:
+
+```
+Rendering 800x600 Mandelbrot set...
+Single-thread:       2.34s
+Multi-thread (8):    0.31s  (7.5× rýchlejšie)
+Uložené: mandelbrot_single.png, mandelbrot_multi.png
+```
+
+Matematika je jednoduchá — pre každý pixel testujeme či bod `c = cx + i·cy` patrí do Mandelbrotovej množiny iterovaním `z → z² + c`:
+
+```rust
+fn mandelbrot(cx: f64, cy: f64) -> u32 {
+    let (mut x, mut y) = (0.0, 0.0);
+    for i in 0..MAX_ITER {
+        if x*x + y*y > 4.0 { return i; }  // bod "unikol" z kruhu
+        (x, y) = (x*x - y*y + cx, 2.0*x*y + cy);
+    }
+    MAX_ITER  // bod zostal ohraničený → je v množine
+}
+```
+
+Pre multi-thread rendering rozdelíme riadky medzi vlákna. Každé vlákno dostane svoj rozsah riadkov, pracuje nezávisle, a výsledky poskladáme po skončení:
+
+```rust
+let handles: Vec<_> = chunks.into_iter().map(|(start, end)| {
+    thread::spawn(move || {
+        let mut local = vec![0u8; (end - start) * WIDTH as usize * 3];
+        for row in start..end {
+            for col in 0..WIDTH as usize {
+                let iter = mandelbrot(/* mapovanie pixelu na komplexnú rovinu */);
+                let [r, g, b] = iter_to_color(iter);
+                // uloženie do local buffer
+            }
+        }
+        local   // vlákno vracia svoj kus výsledku
+    })
+}).collect();
+
+// poskladanie výsledkov
+for (i, handle) in handles.into_iter().enumerate() {
+    let chunk = handle.join().unwrap();
+    pixels[i * chunk_size..][..chunk.len()].copy_from_slice(&chunk);
+}
+```
+
+Toto je základný vzor CPU-bound paralelizmu v Ruste. Žiadny `Arc<Mutex<>>` nie je potrebný — vlákna nepotrebujú zdieľať žiadne dáta počas výpočtu, len si na konci odovzdajú výsledok cez `join()`. Rust to vynucuje: ak by si sa pokúsil zdieľať `&mut pixels` naprieč vláknami bez synchronizácie, kód by sa nezkompiloval.
+
+Spusti s `--release` pre reálne čísla — debug build má vypnuté optimalizácie a bude výrazne pomalší.
