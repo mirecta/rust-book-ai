@@ -115,6 +115,35 @@ Packet::Data { seq, .. } => println!("DATA seq={}", seq),
 
 Toto je veľmi odlišné od C prístupu, kde by si musel explicitne extrahovať každé pole manuálne po overení tagu.
 
+V reálnom kóde vyzerajú enum+match kombinácie takto — napríklad jadro handlera pre sieťový protokol:
+
+```rust
+fn dispatch(pkt: Packet, conn: &mut Connection) -> Result<(), ProtocolError> {
+    match pkt {
+        Packet::Ping { seq } => {
+            conn.send(Packet::Pong { seq })?;
+        }
+        Packet::Data { seq, payload } if payload.len() > MAX_PAYLOAD => {
+            return Err(ProtocolError::PayloadTooLarge(payload.len()));
+        }
+        Packet::Data { seq, payload } => {
+            conn.buffer.extend_from_slice(&payload);
+            conn.send(Packet::Ack(seq))?;
+        }
+        Packet::Ack(seq) => {
+            conn.pending.remove(&seq);
+        }
+        Packet::Reset => {
+            conn.reset();
+            return Err(ProtocolError::ConnectionReset);
+        }
+    }
+    Ok(())
+}
+```
+
+Celý dispatcher je jeden `match` bez jediného `if (type == X)` a bez zabudnuteľných vetiev.
+
 ### Struct destrukturovanie
 
 ```rust
@@ -220,6 +249,86 @@ Guard (`if podmienka` za vzorcom) je vyhodnotený len ak vzor pasuje. Kombináci
 
 Dôležitá poznámka: guard sa vzťahuje len na konkrétnu vetvu, nie na celý vzor. Ak guard nevyhodí `true`, match pokračuje na ďalšiu vetvu — nezastaví sa.
 
+### Kedy guard, kedy viac vzorníc
+
+Guards sú nevyhnutné keď podmienka závisí od hodnoty matchnutej premennej alebo od vonkajšieho stavu. Pre jednoduché rozsahy s inou logikou v každej vetve sú bežné vzory čistejšie:
+
+```rust
+// Guard — závisí od matchnutej premennej
+match value {
+    x if x.is_nan()      => "NaN",
+    x if x.is_infinite() => "∞",
+    x if x < 0.0        => "záporné",
+    _                    => "kladné alebo nula",
+}
+
+// Guard — závisí od vonkajšieho stavu
+let threshold = 100;
+match reading {
+    r if r > threshold * 2 => alarm_critical(r),
+    r if r > threshold     => alarm_warning(r),
+    _                      => {}
+}
+```
+
+Ak guard neprešiel (výsledok je `false`), Rust pokračuje na *ďalšiu vetvu* — toto je kľúčový rozdiel od vnoreného `if`. Vzor a guard tvoria spolu jednu podmienku.
+
+### Guards a exhaustiveness
+
+Guard narúša exhaustiveness checking — kompilátor nevie dokazať, že podmienka `if x > 0` pokryje všetky hodnoty. Preto vždy musíš mať `_` alebo iný vzor bez guardu ako "záchranku":
+
+```rust
+fn analyze(n: i32) -> &'static str {
+    match n {
+        n if n > 0 => "kladné",
+        n if n < 0 => "záporné",
+        // Toto nestačí! Kompilátor nevie že n == 0 tu nie je pokryté...
+        // error[E0004]: non-exhaustive patterns
+    }
+}
+
+// Správne:
+fn analyze(n: i32) -> &'static str {
+    match n {
+        n if n > 0 => "kladné",
+        n if n < 0 => "záporné",
+        _          => "nula",  // povinné — pokrýva prípad kde guarded vetvy neprešli
+    }
+}
+```
+
+### Reálny príklad: analýza sieťového paketu
+
+```rust
+#[derive(Debug)]
+struct IpPacket {
+    src: [u8; 4],
+    dst: [u8; 4],
+    ttl: u8,
+    protocol: u8,
+    payload_len: usize,
+}
+
+fn classify_packet(pkt: &IpPacket) -> &'static str {
+    match pkt {
+        // Loopback — src a dst začínajú na 127
+        p if p.src[0] == 127 || p.dst[0] == 127 => "loopback",
+        // Multicast — dst v rozsahu 224.0.0.0/4
+        p if p.dst[0] >= 224 && p.dst[0] <= 239 => "multicast",
+        // Broadcast — dst = 255.255.255.255
+        IpPacket { dst: [255, 255, 255, 255], .. } => "broadcast",
+        // Krátky paket — podozrivý
+        p if p.payload_len < 20 => "podozrivý (krátky payload)",
+        // TTL expired — mal by byť zahoden
+        IpPacket { ttl: 0, .. } => "TTL expired",
+        // Normálny unicast
+        _ => "unicast",
+    }
+}
+```
+
+Všimni si kombináciu: niektoré vetvy sú čisté vzory (bez guardu), iné kombinujú vzor s guardom. Rust vyhodnocuje zhora nadol a berie prvú vyhovujúcu vetvu.
+
 ### Kombinovanie viacerých vzorov s guardmi
 
 ```rust
@@ -259,6 +368,85 @@ fn handle_event(event: &Event) {
 
 ---
 
+## Match ako výraz
+
+V Ruste je `match` výraz — vracia hodnotu. To znamená, že môžeš priamo priradiť výsledok matchu do premennej:
+
+```rust
+let description = match status_code {
+    200       => "OK",
+    301 | 302 => "Redirect",
+    404       => "Not Found",
+    500..=599 => "Server Error",
+    _         => "Unknown",
+};
+// description: &'static str
+
+let byte_order: u32 = match cfg!(target_endian = "big") {
+    true  => 0xAABBCCDD,
+    false => 0xDDCCBBAA,
+};
+```
+
+Toto je zásadný rozdiel od C `switch` — `switch` je príkaz (statement), nedá sa použiť na pravej strane priradenia. V Ruste je to bežný idiom, pretože každá vetva musí vracať rovnaký typ.
+
+Kompilátor to vynucuje — ak vety vracajú rôzne typy, dostaneš chybu:
+
+```rust
+let x = match cond {
+    true  => 42u32,
+    false => "hello",  // error[E0308]: mismatched types — expected u32, found &str
+};
+```
+
+### Match ako výraz v inicializácii štruktúr
+
+```rust
+struct Config {
+    port: u16,
+    workers: usize,
+    log_level: &'static str,
+}
+
+let env = std::env::var("RUST_ENV").unwrap_or_default();
+
+let config = Config {
+    port: match env.as_str() {
+        "production" => 443,
+        "staging"    => 8443,
+        _            => 8080,
+    },
+    workers: match std::thread::available_parallelism() {
+        Ok(n)  => n.get(),
+        Err(_) => 4,
+    },
+    log_level: match env.as_str() {
+        "production" => "warn",
+        _            => "debug",
+    },
+};
+```
+
+### Vetvy s blokmi
+
+Vetvy môžu byť bloky `{}` s viacerými príkazmi — posledný výraz bez bodkočiarky je hodnota vetvy:
+
+```rust
+let result = match operation {
+    Op::Add(a, b) => a + b,
+    Op::Div(a, b) => {
+        if b == 0 {
+            eprintln!("Delenie nulou!");
+            return Err("division by zero");
+        }
+        a / b  // posledný výraz bloku = hodnota vetvy
+    }
+    Op::Nop => 0,
+};
+```
+
+---
+
 ## `if let` a `while let`
 
 `match` je mocný, ale niekedy je príliš obšírny keď ťa zaujíma len jeden variant. Na to slúži `if let`:
@@ -289,6 +477,103 @@ fn drain_queue(queue: &mut Vec<u32>) {
 `if let` je syntaktický cukríček — v praxi je to match s jedným vzorcom a ignorovaním ostatných. Kompilátor to aj tak skompiluje rovnako. Výhoda je čitateľnosť.
 
 `while let` je obzvlášť užitočné pri spracovaní dát z fronty alebo streamu — pokračuj pokiaľ dostávaš hodnoty, zastavuj keď dostaneš `None`.
+
+### Kedy `if let` vs `match`
+
+Heuristika je jednoduchá: ak ťa zaujíma len *jeden* variant a ostatné ignoruješ alebo riešiš rovnako, použi `if let`. Ak potrebuješ rôzne vety pre rôzne varianty, použi `match`.
+
+```rust
+// if let — jeden variant, ostatné ignorujeme
+if let Event::KeyPress(k) = event {
+    handle_key(k);
+}
+
+// match — každý variant robí niečo iné
+match event {
+    Event::KeyPress(k)          => handle_key(k),
+    Event::MouseClick { x, y, .. } => handle_click(x, y),
+    Event::Resize { width, height } => resize(width, height),
+}
+```
+
+`if let` môžeš aj reťaziť na viacero variantov — toto je ale prípad kde `match` je čistejší:
+
+```rust
+// Škaredé — reťaz if let / else if let
+if let Some(x) = opt_a {
+    handle_a(x);
+} else if let Some(y) = opt_b {
+    handle_b(y);
+} else if let Ok(z) = result_c {
+    handle_c(z);
+}
+
+// Čistejšie — závisle od logiky, niekedy match na tuple
+match (opt_a, opt_b, result_c.ok()) {
+    (Some(x), _, _) => handle_a(x),
+    (_, Some(y), _) => handle_b(y),
+    (_, _, Some(z)) => handle_c(z),
+    _ => {}
+}
+```
+
+### Reálny príklad: spracovanie udalostí ovládača
+
+```rust
+#[derive(Debug)]
+enum DriverEvent {
+    DataReady { channel: u8, bytes: Vec<u8> },
+    Error { code: i32, message: String },
+    Timeout,
+    Reset,
+}
+
+fn process_driver_events(events: &[DriverEvent]) {
+    for event in events {
+        // Zaujíma nás primárne DataReady — ostatné logujeme
+        if let DriverEvent::DataReady { channel, bytes } = event {
+            println!("Channel {}: {} bajtov", channel, bytes.len());
+            handle_data(*channel, bytes);
+            continue;
+        }
+
+        // Errory sú kritické — loguj podrobne
+        if let DriverEvent::Error { code, message } = event {
+            eprintln!("Driver error {}: {}", code, message);
+        }
+    }
+}
+```
+
+### `while let` — iterácia do vyčerpania
+
+`while let` je prirodzený vzor pre prácu so štruktúrami ktoré konzumujú samé seba — zásobník (LIFO), kanál, parser tokenov:
+
+```rust
+// Spracovanie zásobníka
+let mut call_stack: Vec<Frame> = build_stack();
+while let Some(frame) = call_stack.pop() {
+    execute_frame(frame);
+    // frame je dropped tu — žiadne pretekanie pamäte
+}
+
+// Čítanie z kanála kým nie je prázdny (non-blocking)
+while let Ok(message) = rx.try_recv() {
+    handle(message);
+}
+
+// Parsovanie tokenov
+let mut tokens = tokenize(source);
+while let Some(token) = tokens.next() {
+    match token {
+        Token::Keyword(kw) => parse_keyword(kw, &mut tokens),
+        Token::Ident(name) => parse_ident(name),
+        Token::Eof        => break,
+    }
+}
+```
+
+`while let` a `loop { match { break } }` sú ekvivalentné, ale `while let` je stručnejšie keď podmienka ukončenia je práve vyčerpanie Option.
 
 ### `let else` — guard pattern
 
