@@ -671,4 +671,21 @@ Všimni si, čo sa deje v `TlvField` — `value: &'a [u8]` je referencia priamo 
 
 Typový systém Rustu nie je len iná syntax — je to iný spôsob myslenia o dátach. Namiesto "každá hodnota môže byť čokoľvek, kontroluj za runtime" dostaneš "typy popisujú presne čo hodnota môže byť, a kompilátor to overí za compile time". Keď si na to zvykneš, bude ti C pôsobiť ako chôdza so zaviazanými očami.
 
+---
+
+## Vizuálny príklad — Type System Explorer
+
+    cargo run --bin k03_types
+
+Ľavá strana zobrazuje tabuľku všetkých primitívnych typov s ich veľkosťami a rozsahmi — farebne rozdelená na unsigned (zelená), signed (žltá) a float (cyan). Každý C programátor pozná tieto čísla, ale je dobré ich mať na jednom mieste s jasným prehľadom.
+
+Pravá strana vizualizuje **Tagged Union** — `enum IpAddr { V4(u8,u8,u8,u8), V6(String) }`. Každá bunka je jeden bajt v pamäti:
+- Červená bunka = tag (discriminant) — Rust vie ktorý variant je aktívny
+- Zelená = dáta variantu V4 (štyri u8)
+- Modrá/cyan/magenta = ptr + len + cap pre V6 String
+
+`TAB` prepína medzi V4 a V6 — vidíš ako sa mení využitie pamäte ale celková veľkosť ostáva rovnaká (najväčší variant určuje veľkosť).
+
+Ovládanie: `TAB` = prepnúť variant, `Q` = koniec.
+
 V ďalšej kapitole sa pozrieme na Pattern Matching — nástroj, ktorý z enumerov a štruktúr extrahuje dáta spôsobom, ktorý je omnoho expresívnejší než C `switch` a `if-else` reťazce.

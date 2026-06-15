@@ -606,4 +606,20 @@ match value {
 
 Pattern matching nie je len "lepší switch". Je to fundamentálne iný spôsob ako rozmýšľať o vetvení kódu — namiesto "aká je hodnota tejto premennej" sa pýtaš "akú štruktúru má tato hodnota a čo z nej potrebujem extrahovať". Keď ho skombinuješ s enumerami, dostaneš výrazový jazyk pre modelovanie doménových stavov, ktorý je súčasne bezpečný a expresívny.
 
+---
+
+## Vizuálny príklad — Pattern Match Visualizer
+
+    cargo run --bin k04_matching
+
+Demo zobrazuje `match` expression s piatimi arms pre `Result<i32, &str>`. Zadaj hodnotu do vstupného poľa a stlač Enter:
+
+- Číslo ako `7` → `Ok(7)` — uvidíš ako sa arms postupne kontrolujú zhora nadol, match guards sa vyhodnotia, a správny arm sa zvýrazní zelenou
+- Záporné číslo ako `-3` → zvýraznenie prvého armu s guard `if n < 0`
+- Text ako `err:chyba` → `Err(e)` arm
+
+Panel dole vysvetľuje *prečo* daný arm matchol a prečo predchádzajúce zlyhali. Je to interaktívny borrow checker pre pattern matching — skús rôzne kombinácie a sleduj ako Rust vyhodnocuje vzory v poradí.
+
+Ovládanie: písanie = vstup, `Enter` = vyhodnotiť, `Esc`/`Q` = koniec.
+
 Ďalšia kapitola: Traits — polymorfizmus bez dedičnosti. Keď vieš ako definovať dátové typy a ako ich matchovať, prirodzená otázka je: "ako definujem správanie, ktoré je spoločné pre viacero typov?" Na to slúžia traits.

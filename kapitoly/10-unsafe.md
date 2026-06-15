@@ -1024,3 +1024,27 @@ Kľúčový insight: C programátor píše `unsafe` kód každý deň — len be
 Keď vidíš `unsafe` v Ruste, je to varovný prúžok na mieste kde si treba dávať pozor. Keď vidíš `int* ptr` v C, neviete nič.
 
 Ďalšia kapitola: Bevy — ECS herný engine a iný spôsob myslenia o architektúre.
+
+---
+
+## Vizuálny príklad — Memory Visualizer
+
+    cargo run --bin k10_memory
+
+Raw pamäť pohľadom na hex dump — s farebným označením čo kde patrí a čo sa stane keď niečo pokazíš.
+
+Grid zobrazuje 192 bajtov pamäte (12 riadkov × 16 stĺpcov):
+- **Zelená** = STACK: `let x: i32 = 42` (vidíš `2A 00 00 00` v little-endian), `let y: f64 = 3.14` (IEEE 754 reprezentácia), raw pointer
+- **Modrá** = HEAP: `Vec<u8>` s obsahom "Hello, Rust!" ako ASCII kódy
+- **Tmavočervená** = UNMAPPED: oblasti kde prístup spôsobí segfault — zobrazené ako `??`
+
+Šípky presúvajú kurzor — pravý panel ukazuje čo táto konkrétna adresa obsahuje, v ktorom regióne je, a či je prístup bezpečný.
+
+`TAB` prepína scenáre:
+1. **Normálny prístup** — cursor len na validnej pamäti
+2. **Raw pointer** — žltá šípka ukazuje ako `*mut i32` smeruje zo STACK na HEAP
+3. **Use-after-free** — HEAP sčervenie (uvoľnená pamäť), pointer naň bliká červenou; "toto by v C crashlo, Rust to zakazuje v safe kóde"
+
+Toto je vizualizácia toho prečo unsafe blok existuje — nie ako "vypnutie kontroly", ale ako označenie miesta kde ty preberáš zodpovednosť za invarianty ktoré kompilátor nedokáže overiť.
+
+Ovládanie: šípky = pohyb kurzora, `TAB` = scenár, `Q` = koniec.

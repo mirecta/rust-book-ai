@@ -933,3 +933,23 @@ V reálnom sieťovom serveri je typická kombinácia: Tokio pre sieťové I/O, a
 Rust výhody oproti C/C++ nie sú len bezpečnosť — sú to aj ergonómia (RAII všade, žiadne ručné unlock), expressivita (type system kóduje kontrakty), a výkon (zero-cost abstrakcie). `Arc<Mutex<T>>` nie je pomalší ako `pthread_mutex_t` + ručné riadenie lifetimov — kompilátor generuje rovnaký strojový kód.
 
 Ďalšia kapitola: Unsafe Rust — keď potrebuješ vystúpiť zo zóny bezpečnosti.
+
+---
+
+## Vizuálny príklad — Thread & Mutex Visualizer
+
+    cargo run --bin k09_threads
+
+Concurrency bugy sú zákerné — data races sa nedajú reprodukovať deterministicky. Toto demo vizualizuje *prečo* `Mutex` funguje ako ochrana.
+
+Vidíš 6 vlákien (farebné kruhy) rotujúcich okolo centrálneho boxu `Mutex<Data>`:
+- Vlákna v **bielej** farbe čakajú alebo vykonávajú inú prácu
+- Blikajúce vlákno sa pokúša získať lock (`acquiring`)
+- **Len jedno vlákno** môže byť vnútri boxu naraz — box sa zafarbí jeho farbou
+- Po 1.5 sekundách uvoľní lock a ďalšie vlákno môže vstúpiť
+
+`SPACE` prepne na **Deadlock scenár** — dva mutexy, dve vlákna, každé drží jeden a čaká na druhý. Červené šípky a blikajúce varovanie ukazujú prečo deadlock nie je bug ktorý Rust zachytí — je to logická chyba, nie memory safety problém.
+
+Pre C programátora: toto je vizualizácia toho prečo `pthread_mutex_lock` + `pthread_mutex_unlock` musíš vždy párovať — a prečo RAII v Ruste (`MutexGuard` s `Drop`) to robí automaticky.
+
+Ovládanie: `SPACE` = deadlock scenár, `Q` = koniec.

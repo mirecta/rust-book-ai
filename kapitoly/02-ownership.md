@@ -528,4 +528,24 @@ Lifetime:       ako dlho je referencia garantovane validná (compile time analý
 
 Toto nie je len teória. Každý z týchto pravidiel má priamy odraz v reálnych bugoch ktoré Rust zabraňuje — use-after-free, double-free, iterator invalidation, dangling pointers, data races. Nie preto že programátori v Ruste sú múdrejší. Preto že tieto pravidlá kontroluje stroj.
 
+---
+
+## Vizuálny príklad — Ownership Visualizer
+
+Ownership a move semantics sú koncepty, ktoré sú ľahké pochopiť keď ich *vidíš* v reálnom čase. Spusti TUI demo:
+
+    cargo run --bin k02_ownership
+
+Uvidíš tri stĺpce — **STACK**, **HEAP** a **DROPPED**. Demo ťa krokuje (SPACE) cez život `String` hodnoty:
+
+1. `let s1 = String::from("hello")` — bunka sa objaví v STACK, dáta v HEAP
+2. `let s2 = s1` — s1 sa presunie do DROPPED, s2 preberie vlastníctvo
+3. `// s1.len()` — pokus o prístup k dropped hodnote: bunka bliká červenou
+4. `drop(s2)` — heap sa uvoľní, s2 tiež DROPPED
+5. Záver: žiadny double-free, žiadny leak — Rust to zaručil *bez garbage collectora*
+
+Ovládanie: `SPACE` = ďalší krok, `Q` = koniec.
+
+Pre C programátora: toto je to isté čo by musel robiť `valgrind --leak-check=full` — len Rust to overuje v čase kompilácie.
+
 V nasledujúcej kapitole ideme na typy, štruktúry a enums — s ownership v hlave pochopíš prečo `Option<T>` nahrádza NULL a `Result<T, E>` nahrádza errno. A začneme budovať veci ktoré sú reálne užitočné.
